@@ -1,0 +1,49 @@
+version: 0.2
+
+env:
+  variables:
+    IMAGE_TAG: latest
+
+phases:
+  pre_build:
+    commands:
+      - set -eu
+      - echo "Logging in to ECR..."
+      - aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+
+  build:
+    commands:
+      - set -eu
+      - REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+      - echo "Building image at ${REPO_URI}:${IMAGE_TAG} from ./backend"
+      - cd backend
+      - docker build -t "${REPO_URI}:${IMAGE_TAG}" .
+
+  post_build:
+    commands:
+      - set -eu
+      - REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+      - docker push "${REPO_URI}:${IMAGE_TAG}"
+      - echo "Deploying to Lambda..."
+      - |
+        IMAGE_URI="${REPO_URI}:${IMAGE_TAG}"
+        echo "Using IMAGE_URI=${IMAGE_URI}"
+        echo "Usin LAMBDA_EXEC_ROLE_ARN=${LAMBDA_EXEC_ROLE_ARN}"
+        if aws lambda get-function --function-name "${LAMBDA_FUNCTION_NAME}" >/dev/null 2>&1; then
+          aws lambda update-function-code --function-name "${LAMBDA_FUNCTION_NAME}" --image-uri "${IMAGE_URI}" >/dev/null
+          echo "Updated existing Lambda function."
+        else
+          aws lambda create-function \
+            --region eu-north-1 \
+            --function-name "${LAMBDA_FUNCTION_NAME}" \
+            --package-type Image \
+            --code ImageUri="${IMAGE_URI}" \
+            --role "${LAMBDA_EXEC_ROLE_ARN}" \
+            --timeout 45 \
+            --memory-size 3008 \
+            --architectures x86_64 >/dev/null
+          echo "Created new Lambda function."
+        fi
+
+artifacts:
+  files: []
